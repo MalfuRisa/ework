@@ -1,0 +1,6 @@
+# 容器内直接执行/读取的文件必须是 LF，避免 Windows checkout 后出现 CRLF。
+docker-entrypoint.sh text eol=lf
+*.sh text eol=lf
+nginx.conf.template text eol=lf
+Dockerfile text eol=lf
+deploy/*.env.example text eol=lf

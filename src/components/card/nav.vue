@@ -3,7 +3,7 @@
     <ul class="nav-ul">
         <li class="nav-li" v-for="(item,index) in navData" :key="index">
             <Poptip placement="right" trigger="hover" :transfer="true" width="200" class="nav-poptip">
-                <div class="link-item" @click="jumpLink(item)">
+                <a class="link-item" :href="item.link" target="_blank" rel="noopener noreferrer" @click="recordUse(item)">
                     <div class="link-icon">
                         <img class="icon" v-lazy="item.icon" alt="" v-if="item.icon">
                         <span class="icon-letter" v-else>{{ (item.name || '?')[0].toUpperCase() }}</span>
@@ -12,7 +12,7 @@
                         <span class="link-name">{{ item.name }}</span>
                         <span class="link-desc" v-if="item.desc">{{ item.desc }}</span>
                     </div>
-                </div>
+                </a>
                 <div class="poptip-panel" slot="content">
                     <div class="poptip-url">
                         <Icon type="ios-link" class="poptip-url-icon"/>
@@ -44,7 +44,7 @@
             </Poptip>
         </li>
     </ul>
-    <Spin size="large" fix v-if="spinShow"></Spin>
+    <Spin size="large" fix v-if="spinShow" class="nav-loading-spin"></Spin>
 </div>
 </template>
 
@@ -68,10 +68,19 @@ export default {
         }
     },
     methods: {
-        jumpLink (item) {
+        recordUse (item) {
             item.title = this.subTitle
-            this.saveUsedList(item)
-            window.open(item.link)
+            try {
+                this.saveUsedList(item)
+            } catch (e) {
+                // 记录常用失败不能阻止浏览器的默认链接跳转。
+                // eslint-disable-next-line no-console
+                console.error('Failed to record used link:', e)
+            }
+        },
+        jumpLink (item) {
+            this.recordUse(item)
+            window.open(item.link, '_blank', 'noopener,noreferrer')
         },
         copyLink (link) {
             var clipboard = new Clipboard('.poptip-btn', { text: function () { return link } })
@@ -115,6 +124,10 @@ export default {
 <style lang=less scoped>
 @min-width: 768px;
 
+.nav-loading-spin {
+    pointer-events: none;
+}
+
 .nav-ul {
     display: flex;
     flex-wrap: wrap;
@@ -139,6 +152,8 @@ export default {
     background: var(--card-bg);
     border: 1px solid var(--border-color);
     border-radius: 12px;
+    color: inherit;
+    text-decoration: none;
     transition: all 0.2s ease;
 
     &:hover {

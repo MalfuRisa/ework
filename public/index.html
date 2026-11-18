@@ -16,6 +16,8 @@
       <strong>We're sorry but ework doesn't work properly without JavaScript enabled. Please enable it to continue.</strong>
     </noscript>
     <div id="app"></div>
+    <!-- 容器启动时由 docker-entrypoint.sh 覆盖，必须在应用 bundle 之前加载 -->
+    <script src="<%= BASE_URL %>config.js"></script>
     <!-- built files will be auto injected -->
   </body>
 </html>

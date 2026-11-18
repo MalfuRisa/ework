@@ -91,7 +91,7 @@ export function removeUsed () {
 
 const RB_SETTINGS_KEY = '__rb_settings__'
 
-const RB_DEFAULTS = {
+const RB_BUILD_DEFAULTS = {
     dataMode: process.env.VUE_APP_DATA_MODE || 'local',
     configType: process.env.VUE_APP_CONFIG_TYPE || 'rainbow-bridge',
     baseUrl: process.env.VUE_APP_RB_BASE_URL || '/rainbow-bridge',
@@ -107,28 +107,66 @@ const RB_DEFAULTS = {
     skipSslVerify: process.env.VUE_APP_SKIP_SSL_VERIFY === 'true'
 }
 
-export function loadRbSettings () {
-    const value = Cookies.getJSON(RB_SETTINGS_KEY)
-    if (!value) return { ...RB_DEFAULTS }
-    return {
-        dataMode: value.dataMode || RB_DEFAULTS.dataMode,
-        configType: value.configType || RB_DEFAULTS.configType,
-        baseUrl: value.baseUrl || RB_DEFAULTS.baseUrl,
-        environment: value.environment || RB_DEFAULTS.environment,
-        localDataUrl: value.localDataUrl || RB_DEFAULTS.localDataUrl,
-        nacosServerAddr: value.nacosServerAddr || RB_DEFAULTS.nacosServerAddr,
-        nacosNamespace: value.nacosNamespace || RB_DEFAULTS.nacosNamespace,
-        nacosDataId: value.nacosDataId || RB_DEFAULTS.nacosDataId,
-        nacosGroup: value.nacosGroup || RB_DEFAULTS.nacosGroup,
-        apolloMeta: value.apolloMeta || RB_DEFAULTS.apolloMeta,
-        apolloAppId: value.apolloAppId || RB_DEFAULTS.apolloAppId,
-        apolloNamespace: value.apolloNamespace || RB_DEFAULTS.apolloNamespace,
-        skipSslVerify: value.skipSslVerify !== undefined ? value.skipSslVerify : RB_DEFAULTS.skipSslVerify
+const RB_DATA_MODES = ['local', 'remote']
+const RB_CONFIG_TYPES = ['rainbow-bridge', 'nacos', 'apollo']
+const RB_STRING_KEYS = [
+    'baseUrl',
+    'environment',
+    'localDataUrl',
+    'nacosServerAddr',
+    'nacosNamespace',
+    'nacosDataId',
+    'nacosGroup',
+    'apolloMeta',
+    'apolloAppId',
+    'apolloNamespace'
+]
+
+function rbString (value) {
+    if (typeof value !== 'string') return null
+    const trimmed = value.trim()
+    return trimmed ? trimmed : null
+}
+
+function rbBoolean (value) {
+    if (typeof value === 'boolean') return value
+    if (typeof value === 'string') {
+        const normalized = value.trim().toLowerCase()
+        if (normalized === 'true' || normalized === '1') return true
+        if (normalized === 'false' || normalized === '0') return false
     }
+    return null
+}
+
+// 只接受已知字段和合法类型，非法值视为未设置，继续向下一层回退。
+function normalizeRbConfig (value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+    const config = {}
+    if (RB_DATA_MODES.indexOf(value.dataMode) > -1) config.dataMode = value.dataMode
+    if (RB_CONFIG_TYPES.indexOf(value.configType) > -1) config.configType = value.configType
+    RB_STRING_KEYS.forEach(function (key) {
+        const normalized = rbString(value[key])
+        if (normalized !== null) config[key] = normalized
+    })
+    const skipSslVerify = rbBoolean(value.skipSslVerify)
+    if (skipSslVerify !== null) config.skipSslVerify = skipSslVerify
+    return config
+}
+
+function readRuntimeConfig () {
+    if (typeof window === 'undefined') return {}
+    return normalizeRbConfig(window.ESHOP_CONFIG)
+}
+
+// 优先级：有效的浏览器设置 > 容器运行配置(config.js) > 构建默认值
+const RB_DEFAULTS = Object.assign({}, RB_BUILD_DEFAULTS, readRuntimeConfig())
+
+export function loadRbSettings () {
+    return Object.assign({}, RB_DEFAULTS, normalizeRbConfig(Cookies.getJSON(RB_SETTINGS_KEY)))
 }
 
 export function saveRbSettings (settings) {
-    Cookies.set(RB_SETTINGS_KEY, settings)
+    Cookies.set(RB_SETTINGS_KEY, normalizeRbConfig(settings))
 }
 
 export function removeRbSettings () {

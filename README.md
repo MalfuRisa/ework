@@ -73,14 +73,28 @@ yarn lint
 | `VUE_APP_RB_ENVIRONMENT` | 环境名称 | `navi` |
 | `VUE_APP_RB_PIPELINE` | Pipeline（不可用户配置） | `main` |
 
+容器部署时还可以用 `DATA_MODE`、`RB_ENVIRONMENT`、`RB_PROXY_UPSTREAM` 等运行时变量切换虹桥实例和团队环境，
+无需重新构建镜像；详见 [DOCKER.md](./DOCKER.md) 和 [RB_INTEGRATION.md](./RB_INTEGRATION.md)。
+
 ## Docker 部署
 
 ```bash
 # 构建镜像
 docker build -t ework .
 
-# 运行
+# 运行（默认本地数据模式）
 docker run -d -p 80:80 ework
+```
+
+虹桥试点示例：
+
+```bash
+docker run -d -p 8080:80 \
+  -e DATA_MODE=remote \
+  -e RB_BASE_URL=/rainbow-bridge \
+  -e RB_ENVIRONMENT=<团队环境 key> \
+  -e RB_PROXY_UPSTREAM=http://<虹桥主机>:<端口> \
+  ework
 ```
 
 ## 效果演示

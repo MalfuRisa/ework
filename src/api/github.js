@@ -25,8 +25,8 @@ export function GetWebData() {
     }
     if (settings.dataMode === 'remote') {
         if (settings.configType === 'rainbow-bridge') {
-            return fetchAllNavData(settings.baseUrl, settings.environment, settings.skipSslVerify).then((data) => {
-                return { data: data }
+            return fetchAllNavData(settings.baseUrl, settings.environment, settings.skipSslVerify).then((result) => {
+                return { data: result.groups, warnings: result.failedGroups }
             })
         } else if (settings.configType === 'nacos') {
             return fetchNacosConfig(

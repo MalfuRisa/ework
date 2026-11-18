@@ -1,23 +1,23 @@
 <template>
     <div class="card-list">
-        <div id="我的收藏" class="card-section" v-show="favoriteList.length">
+        <div id="我的收藏" class="card-section" v-show="visibleFavoriteList.length">
             <Card class="nodeCard">
                 <p slot="title" class="anchor">我的收藏<a href="#我的收藏">#</a></p>
                 <span slot="extra" class="card-extra-btn" @click="removeFavorite">
                     <Icon type="ios-loop-strong"></Icon>
                     清空
                 </span>
-                <Nav :navData="favoriteList" :del=true :spinShow="spinShow"></Nav>
+                <Nav :navData="visibleFavoriteList" :del=true :spinShow="spinShow"></Nav>
             </Card>
         </div>
-        <div id="常用网址" class="card-section" v-show="usedList.length">
+        <div id="常用网址" class="card-section" v-show="visibleUsedList.length">
             <Card class="nodeCard">
                 <p slot="title" class="anchor">常用网址<a href="#常用网址">#</a></p>
                 <span slot="extra" class="card-extra-btn" @click="removeUsed">
                     <Icon type="ios-loop-strong"></Icon>
                     清空
                 </span>
-                <Nav :navData="usedList" :del=true :spinShow="spinShow"></Nav>
+                <Nav :navData="visibleUsedList" :del=true :spinShow="spinShow"></Nav>
             </Card>
         </div>
         <div :id="item.title" class="card-section" v-for="(item,index) in data" :key="index">
@@ -38,11 +38,36 @@ export default {
         data: {
             default: {}
         },
+        catalog: {
+            default: null
+        },
+        filterHistory: {
+            type: Boolean,
+            default: false
+        },
         spinShow: {
             default: false
         }
     },
     methods: {
+        filterCurrentHistory (list) {
+            if (!this.currentLinkMap) return list
+            var map = this.currentLinkMap
+            return list.map(function (item) {
+                if (!item || !item.resourceKey || !map[item.resourceKey]) return null
+                var current = map[item.resourceKey]
+                return {
+                    name: current.name,
+                    link: current.link,
+                    desc: current.desc,
+                    icon: current.icon,
+                    sortOrder: current.sortOrder,
+                    alias: current.alias,
+                    resourceKey: current.resourceKey,
+                    num: item.num
+                }
+            }).filter(function (item) { return item !== null })
+        },
         removeUsed () {
             this.removeUsedList()
             this.$Message.success('清空成功')
@@ -60,7 +85,24 @@ export default {
         ...mapGetters([
             'favoriteList',
             'usedList'
-        ])
+        ]),
+        currentLinkMap () {
+            if (!this.filterHistory) return null
+            var groups = Array.isArray(this.catalog) ? this.catalog : (Array.isArray(this.data) ? this.data : [])
+            var map = {}
+            groups.forEach(function (group) {
+                (group.nav || []).forEach(function (item) {
+                    if (item.resourceKey) map[item.resourceKey] = item
+                })
+            })
+            return map
+        },
+        visibleFavoriteList () {
+            return this.filterCurrentHistory(this.favoriteList)
+        },
+        visibleUsedList () {
+            return this.filterCurrentHistory(this.usedList)
+        }
     },
     components: {
         Nav

@@ -26,87 +26,171 @@ function createService(skipSslVerify) {
   return service
 }
 
-function configToNavItem(c) {
-  var nav = {
-    name: c.name || c.alias || '',
-    link: '',
-    desc: c.remark || '',
-    icon: ''
-  }
-
-  if (c.type === 'text') {
-    nav.link = c.content || ''
-  } else if (c.type === 'keyvalue' || c.type === 'object' || c.type === 'json') {
-    try {
-      var obj = typeof c.content === 'string' ? JSON.parse(c.content) : c.content
-      nav.link = obj.link || obj.url || obj.href || ''
-      nav.icon = obj.icon || obj.favicon || ''
-      nav.desc = obj.desc || obj.description || nav.desc
-      if (!nav.name && obj.name) nav.name = obj.name
-    } catch (e) {
-      nav.link = c.content || ''
-    }
-  } else if (c.type === 'image') {
-    nav.icon = c.content || ''
-  }
-
-  return nav
+function normalizeBaseUrl(baseUrl) {
+  return String(baseUrl || '').replace(/\/+$/, '')
 }
 
-function fetchPipelineConfig(baseUrl, environment, pipelineKey, skipSslVerify) {
-  var service = createService(skipSslVerify)
+function configSortOrder(value) {
+  if (typeof value === 'number' && Number.isInteger(value)) return value
+  if (typeof value === 'string' && /^-?\d+$/.test(value.trim())) {
+    var parsed = Number(value)
+    if (Number.isInteger(parsed)) return parsed
+  }
+  return null
+}
+
+function hasControlCharacter(value) {
+  for (var i = 0; i < value.length; i++) {
+    var code = value.charCodeAt(i)
+    if (code < 0x20 || code === 0x7f || (code >= 0x80 && code <= 0x9f)) return true
+  }
+  return false
+}
+
+function isSafeHttpUrl(value) {
+  var raw = String(value || '').trim()
+  if (!raw || raw.indexOf('\\') > -1 || hasControlCharacter(raw)) return false
+  try {
+    var parsed = new URL(raw)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false
+    if (!parsed.hostname || parsed.username || parsed.password) return false
+    if (parsed.port) {
+      var port = Number(parsed.port)
+      if (!Number.isInteger(port) || port < 1 || port > 65535) return false
+    }
+    return true
+  } catch (e) {
+    return false
+  }
+}
+
+function webLinkContent(c) {
+  if (typeof c.content === 'string') {
+    try {
+      return JSON.parse(c.content)
+    } catch (e) {
+      return null
+    }
+  }
+  return c.content && typeof c.content === 'object' ? c.content : null
+}
+
+// 虹桥远程模式只把当前生效版本中的 web_link 映射为导航卡片。
+function configToNavItem(c) {
+  if (!c || String(c.type || '').trim() !== 'web_link') return null
+
+  var content = webLinkContent(c)
+  if (!content || typeof content !== 'object' || Array.isArray(content)) return null
+
+  var link = String(content.url || '').trim()
+  if (!isSafeHttpUrl(link)) return null
+
+  var icon = String(content.icon_url || '').trim()
+  return {
+    name: c.name || c.alias || '',
+    link: link,
+    desc: c.remark || c.description || '',
+    icon: isSafeHttpUrl(icon) ? icon : '',
+    sortOrder: configSortOrder(content.sort_order),
+    alias: c.alias || '',
+    resourceKey: c.resource_key || ''
+  }
+}
+
+function navItemCompare(a, b) {
+  var aHas = a.sortOrder !== null && a.sortOrder !== undefined
+  var bHas = b.sortOrder !== null && b.sortOrder !== undefined
+  if (aHas !== bHas) return aHas ? -1 : 1
+  if (aHas && a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder
+  var aliasCompare = String(a.alias || '').localeCompare(String(b.alias || ''), 'en')
+  if (aliasCompare !== 0) return aliasCompare
+  return String(a.resourceKey || '').localeCompare(String(b.resourceKey || ''), 'en')
+}
+
+function rbErrorInfo(error) {
+  var response = error && error.response
+  var body = response && response.data
+  return {
+    status: response && response.status,
+    errorType: body && body.error_type,
+    message: (body && (body.error || body.msg)) || (error && error.message) || 'unknown error'
+  }
+}
+
+function fetchPipelineConfig(service, baseUrl, environment, pipeline) {
   return service({
-    url: baseUrl + '/api/v1/runtime/config',
+    url: baseUrl + '/api/v1/runtime/release',
     method: 'get',
     headers: {
       'x-environment': environment,
-      'x-pipeline': pipelineKey
+      'x-pipeline': pipeline.pipeline_key
+    },
+    params: {
+      scope_id: pipeline.scope_id
     }
   }).then(function (resp) {
     var body = resp.data
-    if (body && body.code === 200 && body.data && body.data.configs) {
-      return body.data.configs.map(configToNavItem).filter(function (n) {
-        return n.link || n.icon
-      })
+    if (!body || body.code !== 200 || !body.data || !Array.isArray(body.data.configs)) {
+      var error = new Error('虹桥返回了无法识别的导航配置')
+      error.rbErrorType = body && body.error_type
+      throw error
     }
-    return []
+    return body.data.configs
+      .map(configToNavItem)
+      .filter(function (n) { return n !== null })
+      .sort(navItemCompare)
   })
 }
 
 export function fetchAllNavData(baseUrl, environment, skipSslVerify) {
   var service = createService(skipSslVerify)
+  var root = normalizeBaseUrl(baseUrl)
   return service({
-    url: baseUrl + '/api/v1/pipeline/list',
-    method: 'get',
-    params: { environment_key: environment }
+    url: root + '/api/v1/runtime/overview',
+    method: 'get'
   }).then(function (resp) {
     var body = resp.data
-    if (!body || body.code !== 200 || !body.data || !body.data.list) {
-      return []
+    if (!body || body.code !== 200 || !body.data || !Array.isArray(body.data.list)) {
+      throw new Error('虹桥环境与分组读取失败')
+    }
+    var env = body.data.list.find(function (item) {
+      return item.environment_key === environment
+    })
+    if (!env) {
+      throw new Error('虹桥环境未找到: ' + environment)
     }
 
-    var pipelines = body.data.list
-      .filter(function (p) { return p.is_active !== false })
-      .sort(function (a, b) { return (a.sort_order || 0) - (b.sort_order || 0) })
-
-    var requests = pipelines.map(function (p) {
-      return fetchPipelineConfig(baseUrl, environment, p.pipeline_key, skipSslVerify).then(function (nav) {
+    var pipelines = Array.isArray(env.pipelines) ? env.pipelines : []
+    var failedGroups = []
+    var requests = pipelines.map(function (pipeline) {
+      return fetchPipelineConfig(service, root, environment, pipeline).then(function (nav) {
+        if (nav.length === 0) return null
         return {
-          title: p.pipeline_name || p.pipeline_key,
-          name: p.pipeline_key,
+          title: pipeline.pipeline_name || pipeline.pipeline_key,
+          name: pipeline.pipeline_key,
           nav: nav
         }
-      }).catch(function () {
-        return {
-          title: p.pipeline_name || p.pipeline_key,
-          name: p.pipeline_key,
-          nav: []
+      }).catch(function (error) {
+        var info = rbErrorInfo(error)
+        if (info.status === 404 && info.errorType === 'RELEASE_NOT_ACTIVE') {
+          return null
         }
+        failedGroups.push({
+          key: pipeline.pipeline_key,
+          title: pipeline.pipeline_name || pipeline.pipeline_key,
+          status: info.status,
+          errorType: info.errorType,
+          message: info.message
+        })
+        return null
       })
     })
 
     return Promise.all(requests).then(function (results) {
-      return results.filter(function (r) { return r.nav.length > 0 })
+      return {
+        groups: results.filter(function (group) { return group !== null }),
+        failedGroups: failedGroups
+      }
     })
   })
 }

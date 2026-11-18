@@ -16,8 +16,8 @@ ework 导航站通过「三方API」配置中心动态获取导航数据，支�
 │             │  HTTP   │   Rainbow Bridge     │
 │   ework     │ ──────> │   配置管理平台         │
 │  导航站      │         │                      │
-│             │ <────── │  /api/v1/pipeline/list│
-│             │         │  /api/v1/runtime/config│
+│             │ <────── │  /api/v1/runtime/overview│
+│             │         │  /api/v1/runtime/release│
 └─────────────┘         └──────────────────────┘
 ```
 
@@ -26,19 +26,25 @@ ework 导航站通过「三方API」配置中心动态获取导航数据，支�
 ```
 页面加载
   │
+  ├─ 执行容器生成的 config.js
+  │    └─ window.ESHOP_CONFIG（运行配置）
+  │
   ├─ 读取 Cookie 中的覆盖配置 (loadRbSettings)
   │    ├─ dataMode: local / remote
   │    ├─ configType: rainbow-bridge / nacos / apollo
   │    ├─ 各配置中心连接参数
   │    └─ skipSslVerify: SSL 证书验证开关
   │
+  │  取值优先级：有效浏览器设置 > 容器运行配置 > 构建时默认值
+  │
   ├─ dataMode === 'local'
   │    └─ 请求静态 JSON 文件 (COS)
   │
   └─ dataMode === 'remote'
        ├─ configType === 'rainbow-bridge'
-       │    ├─ GET /api/v1/pipeline/list
-       │    └─ 对每个 Pipeline: GET /api/v1/runtime/config
+       │    ├─ GET /api/v1/runtime/overview（公开，环境/分组顺序）
+       │    └─ 对每个分组: GET /api/v1/runtime/release?scope_id=...
+       │       （Header 带环境/渠道，读取当前 active；未发布分组隐藏）
        │
        ├─ configType === 'nacos'
        │    └─ GET /v1/cs/configs 直接获取导航 JSON
@@ -52,127 +58,85 @@ ework 导航站通过「三方API」配置中心动态获取导航数据，支�
 
 ## API 接口
 
-### 1. 获取 Pipeline 列表
+### 1. 获取环境与分组概览
 
 ```
-GET {baseUrl}/api/v1/pipeline/list?environment_key={environment}
+GET {baseUrl}/api/v1/runtime/overview
 ```
 
-**请求参数 (Query):**
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `environment_key` | string | 是 | 环境标识，如 `navi`、`prod` |
-| `is_active` | bool | 否 | 传 `true` 仅返回活跃的 Pipeline |
-
-**响应:**
+公开接口，无需登录或管理 Cookie。返回已启用的环境与渠道，`pipelines` 顺序即服务端分组顺序（`sort_order ASC, created_at ASC`）。分组标题使用 `pipeline_name`；不能把发布快照里的旧渠道名当作当前标题。
 
 ```json
 {
-    "code": 200,
-    "msg": "OK",
-    "data": {
-        "total": 3,
-        "list": [
-            {
-                "environment_key": "navi",
-                "pipeline_key": "dev-tools",
-                "pipeline_name": "开发工具",
-                "description": "开发相关工具导航",
-                "sort_order": 1,
-                "is_active": true
-            }
-        ]
-    }
+  "code": 200,
+  "msg": "OK",
+  "data": {
+    "total": 1,
+    "list": [{
+      "environment_key": "navi",
+      "environment_name": "研发团队",
+      "environment_id": "...",
+      "pipelines": [{
+        "pipeline_key": "smoke",
+        "pipeline_name": "监控与排障",
+        "scope_id": "...",
+        "environment_id": "..."
+      }]
+    }]
+  }
 }
 ```
 
-### 2. 获取 Pipeline 配置项
+### 2. 读取分组当前生效版本
 
 ```
-GET {baseUrl}/api/v1/runtime/config
+GET {baseUrl}/api/v1/runtime/release?scope_id={scope_id}&x-environment={environment}&x-pipeline={pipeline_key}
 ```
 
-**请求头 (Headers):**
+实际请求使用 Header `x-environment`、`x-pipeline`，并把概览返回的 `scope_id` 作为 query 固定当前范围代身份。省略 `version` 即读取当前 active；不要用管理接口 `/pipeline/list` 或已删除的旧 `/runtime/config`。
 
-| Header | 类型 | 必填 | 说明 |
-|--------|------|------|------|
-| `x-environment` | string | 是 | 环境标识 |
-| `x-pipeline` | string | 是 | Pipeline 标识 |
+**成功：** HTTP 200 且正文 `code=200`，从 `data.configs` 生成卡片。`data.version`、`data.snapshot_id` 是该次实际读取的快照。
 
-**响应:**
-
-```json
-{
-    "code": 200,
-    "msg": "OK",
-    "data": {
-        "configs": [
-            {
-                "resource_key": "gitlab",
-                "name": "GitLab",
-                "alias": "gitlab",
-                "type": "object",
-                "content": {
-                    "link": "https://gitlab.example.com",
-                    "icon": "https://gitlab.example.com/favicon.ico",
-                    "desc": "代码仓库"
-                },
-                "remark": "主代码仓库"
-            }
-        ],
-        "environment": {
-            "environment_key": "navi",
-            "pipeline_name": "开发工具"
-        }
-    }
-}
-```
-
-**认证:** 两个接口均无需认证（Auth 中间件为非强制模式）。
+**404 `RELEASE_NOT_ACTIVE`：** 分组尚未发布，隐藏该分组。
+**503 或其他错误：** 保留其他成功分组，并提示失败分组名称；不要把错误 JSON 当作卡片。
 
 ---
 
-## 配置项类型映射
+## 卡片顺序
 
-虹桥计划支持多种配置类型，ework 按以下规则将配置转换为导航项：
+- 仅 `web_link` 的 `content.sort_order` 按数值升序；未设置或非整数放末尾。
+- 同顺序按 `alias`，再按 `resource_key` 稳定排序。
+- `0` 是有效顺序，不能写成 `sort_order || 0` 后把未设置当成 0。
+- 分组顺序完全沿用 `/runtime/overview`，前端不重新排序。
 
-### Config → NavItem 转换规则
+## 网页链接配置（web_link）
 
-| Config Type | content 格式 | 转换逻辑 |
-|-------------|-------------|---------|
-| `text` | 纯文本 URL | `link = content` |
-| `keyvalue` / `object` / `json` | JSON 对象 | 解析 JSON，提取 `link`/`url`/`href`、`icon`/`favicon`、`desc`/`description`、`name` |
-| `image` | 图片 URL | `icon = content` |
+虹桥远程模式只为当前生效版本中的 `type: "web_link"` 生成卡片。普通文本、图片、对象、键值对即使包含完整网址也不会显示。
+服务端同时校验网址结构，EWork 浏览器端会再次校验，非法或缺失地址的记录直接跳过，同组其他有效链接保留。
 
-### JSON 对象可用字段
-
-```json
-{
-    "link": "https://example.com",
-    "url": "备选链接字段",
-    "href": "备选链接字段",
-    "icon": "https://example.com/favicon.ico",
-    "favicon": "备选图标字段",
-    "desc": "描述文字",
-    "description": "备选描述字段",
-    "name": "显示名称（覆盖 config.name）"
-}
-```
-
-### 推荐配置格式
-
-在虹桥计划中创建导航链接时，推荐使用 `object` 类型，content 格式如下：
+### content 格式
 
 ```json
 {
-    "link": "https://gitlab.example.com",
-    "icon": "https://gitlab.example.com/favicon.ico",
-    "desc": "代码仓库"
+  "url": "https://example.com/path?from=nav#entry",
+  "icon_url": "https://example.com/icon.png",
+  "sort_order": 10
 }
 ```
 
-其中 `name` 由配置项的 `name` 或 `alias` 字段提供，不需要在 content 中重复设置。
+- `url` 必填，必须是带 `http://` 或 `https://` 的完整地址；支持内网域名、IP、端口、查询参数和片段。
+- 拒绝空值、相对地址、协议相对地址、其他协议、含用户信息的地址，以及包含控制字符或反斜杠的地址。
+- `icon_url` 选填，规则与 `url` 相同；留空或无效时 EWork 显示名称首字母。
+- `sort_order` 选填 int32 整数，`0` 有效；留空排在已设置排序的卡片之后。
+- 服务端校验失败返回 HTTP 400、`error_type: CONFIG_INVALID_REQUEST`，错误正文可直接展示在网址/图标/排序字段旁。
+- `runtime/release` 默认把 `web_link.content` 返回为 JSON 对象；显式 `content_format=raw` 返回 JSON 字符串。
+
+### 旧导航迁移
+
+1. 维护人员从确实用于导航的旧对象或文本中复制名称和网址，新建 `web_link` 配置。例如把试点 `rd1` 对象录入为新别名 `rd1-link`。
+2. 对目标渠道完成锁版、创建版本、切换生效，确认 `runtime/release` 中出现 `web_link`。
+3. 再切换 EWork 到严格筛选。旧对象、普通业务配置和历史版本留在原处，不批量推断或转换。
+4. 回退旧快照时，EWork 只显示该快照中已经存在的 `web_link`；旧对象卡片不会重新出现。需要恢复旧卡片内容时，切回之前的生效版本，或在旧快照中补录 `web_link` 后重新发布。收藏/常用中匹配不到当前 `resource_key` 的旧记录保留在本地但不显示。
 
 ---
 
@@ -246,7 +210,59 @@ GET {meta}/configs/{appId}/default/{namespace}
 
 ## 环境配置
 
-### 编译时环境变量
+### 本地开发代理
+
+`vue.config.js` 的 `/rainbow-bridge` 开发代理支持三种上游，前两种保持原有默认行为：
+
+| 配置 | 代理目标 | devServer 端口 | Referer |
+|------|----------|----------------|---------|
+| 都不设置 | `https://rainbow.me` | 8080 | 自动携带上游 Referer |
+| `RB_LOCAL=1` | `http://localhost:8080` | 8081 | 不发送 |
+| `RB_PROXY_TARGET=http://host:port` | 指定虹桥 origin | 8081 | 不发送 |
+
+`RB_PROXY_TARGET` 优先于 `RB_LOCAL`，只写 `scheme://host[:port]`；误带 `/rainbow-bridge` 会自动去掉。
+设置后可配合 `VUE_APP_RB_BASE_URL=/rainbow-bridge`、`VUE_APP_RB_ENVIRONMENT=<环境 key>` 启动开发服务。
+
+Windows 本地联调可以先双击虹桥的 `start-rainbow.cmd`，再双击 EWork 的 `start-ework.cmd`。EWork 默认在 `http://127.0.0.1:8081/` 监听，通过同源代理连接 `127.0.0.1:18080`。如果虹桥已有 `ework-pilot` 环境则默认读取它，否则读取 `default`。已有浏览器设置优先于启动参数，可在 EWork 设置中恢复默认值，或使用无痕窗口验证。导航仅显示目标环境已生效的「网页链接」。
+
+```powershell
+.\start-ework.cmd -Port 8082 -RainbowPort 18081 -EnvironmentKey ework-pilot -NoBrowser
+```
+
+> Windows Git Bash/MSYS 会把命令行里以 `/` 开头的 `VUE_APP_RB_BASE_URL` 转成 `D:/...`，页面会报
+> `Unsupported protocol D:`。请把 `VUE_APP_RB_BASE_URL=/rainbow-bridge` 写在 `.env.development.local`，
+> 或在容器里使用运行配置 `config.js`；启动命令只传 `RB_PROXY_TARGET` 和 `VUE_APP_RB_ENVIRONMENT`。
+
+### 容器运行时变量
+
+容器启动时 `docker-entrypoint.sh` 会把下列环境变量写入 `/usr/share/nginx/html/config.js`，
+页面在应用 bundle 之前读取。同一个镜像无需重新构建即可切换虹桥实例和团队环境，改完重启容器生效。
+
+| 变量 | 写入字段 | 说明 | 默认值 |
+|------|----------|------|--------|
+| `DATA_MODE` | `dataMode` | `local` / `remote` | `local` |
+| `CONFIG_TYPE` | `configType` | `rainbow-bridge` / `nacos` / `apollo` | `rainbow-bridge` |
+| `RB_BASE_URL` | `baseUrl` | 页面读取虹桥的地址，建议同源 `/rainbow-bridge` | `/rainbow-bridge` |
+| `RB_ENVIRONMENT` | `environment` | 团队环境 key | `navi` |
+| `LOCAL_DATA_URL` | `localDataUrl` | 本地数据 JSON 地址 | `/nav-data.json` |
+| `NACOS_*` | 对应字段 | Nacos 连接参数 | 见下表 |
+| `APOLLO_*` | 对应字段 | Apollo 连接参数 | 见下表 |
+| `SKIP_SSL_VERIFY` | `skipSslVerify` | `true` / `false` | `true` |
+
+Nginx 反向代理由同一入口脚本渲染，变量只影响服务器侧：
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `RB_PROXY_UPSTREAM` | 虹桥 origin，只写 `scheme://host[:port]`，脚本会去掉误带的 `/rainbow-bridge` | `https://rainbow.me` |
+| `RB_PROXY_HOST` | 转发 Host 头 | 由上游 host 推导 |
+| `RB_PROXY_REFERER` | 转发 Referer；显式设为空串表示不发送 | 由上游 origin 推导 |
+
+请求路径、查询参数 `scope_id` 以及 `x-environment` / `x-pipeline` 请求头默认原样转发。
+可直接复制的试点配置见 `deploy/ework-pilot.env.example`。
+
+### 构建时环境变量
+
+不提供运行配置时，页面使用以下构建时默认值：
 
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
@@ -365,9 +381,14 @@ yarn build:static
 | `apolloNamespace` | Apollo Namespace |
 | `skipSslVerify` | 是否跳过 SSL 证书验证 |
 
-**优先级:** Cookie 覆盖值 > 编译时环境变量默认值
+**优先级:** 有效的 Cookie 覆盖值 > 容器运行配置 (`window.ESHOP_CONFIG`) > 构建时环境变量默认值
 
-**恢复默认:** 点击「恢复默认」按钮清除 Cookie，回到编译时注入的值。
+- Cookie 中不存在、类型不合法或无法识别的字段会被忽略，继续向下一层回退。
+- 数据类型要求：`dataMode` 只能是 `local`/`remote`，`configType` 只能是 `rainbow-bridge`/`nacos`/`apollo`，
+  其余字段为非空字符串，`skipSslVerify` 为布尔值。
+- 试点浏览器如果此前保存过设置，会覆盖容器配置；清除 Cookie `__rb_settings__` 或点击设置面板「恢复默认」即可回到容器配置。
+
+**恢复默认:** 点击「恢复默认」按钮清除 Cookie，回到容器运行配置或构建时注入的值。
 
 ---
 
@@ -385,8 +406,8 @@ yarn build:static
 
 3. **在 Pipeline 下创建配置项** — 每个配置项对应一个导航链接
    - `name`: 链接名称，如 `GitLab`
-   - `type`: 选择 `object`
-   - `content`: JSON 格式的链接信息
+   - `type`: 选择「网页链接」（`web_link`）
+   - `content`: 填写网址，选填图标网址和排序值
 
 4. **验证** — 在 ework 中将数据模式切换为 `remote`，填入 API 地址和环境名称，保存后页面自动刷新加载数据
 
@@ -396,16 +417,16 @@ yarn build:static
 
 | 配置项 name | type | content |
 |-------------|------|---------|
-| GitLab | object | `{"link":"https://gitlab.com","icon":"https://gitlab.com/favicon.ico","desc":"代码仓库"}` |
-| Jenkins | object | `{"link":"https://jenkins.io","desc":"持续集成"}` |
-| Nginx | object | `{"link":"https://nginx.org","desc":"反向代理"}` |
+| GitLab | web_link | `{"url":"https://gitlab.com","icon_url":"https://gitlab.com/favicon.ico","sort_order":10}` |
+| Jenkins | web_link | `{"url":"https://jenkins.io","sort_order":20}` |
+| Nginx | web_link | `{"url":"https://nginx.org","sort_order":30}` |
 
 **Pipeline: 文档管理 (docs)**
 
 | 配置项 name | type | content |
 |-------------|------|---------|
-| ShowDoc | object | `{"link":"https://showdoc.com","desc":"API 文档"}` |
-| Confluence | object | `{"link":"https://confluence.com","desc":"团队 Wiki"}` |
+| ShowDoc | web_link | `{"url":"https://showdoc.com","sort_order":0}` |
+| Confluence | web_link | `{"url":"https://confluence.com","sort_order":10}` |
 
 ---
 
@@ -425,6 +446,16 @@ src/
 │       ├── sub.vue         # 分类卡片容器
 │       └── nav.vue         # 导航链接项
 └── store/                  # Vuex (收藏/常用)
+```
+
+容器运行配置相关：
+
+```
+public/config.js               # 占位文件，容器启动时由 entrypoint 覆盖
+public/index.html              # 在应用 bundle 之前加载 config.js
+nginx.conf.template            # /rainbow-bridge/ 代理模板
+docker-entrypoint.sh           # 生成 config.js 并渲染 Nginx 配置
+deploy/ework-pilot.env.example # 内网试点配置示例
 ```
 
 ## 错误处理

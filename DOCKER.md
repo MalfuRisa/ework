@@ -10,9 +10,8 @@ docker-compose -f docker-compose.simple.yml up -d
 
 ### 2. 虹桥计划远程模式
 ```bash
-# 修改 docker-compose.simple.yml 中 DATA_MODE=remote
-# 然后启动
-docker-compose -f docker-compose.simple.yml up -d
+# 把 DATA_MODE 改为 remote，并确认 RB_ENVIRONMENT / RB_PROXY_UPSTREAM
+docker-compose -f docker-compose.simple.yml up -d --build
 ```
 
 ### 3. 完整模式（含 Nacos/Apollo）
@@ -22,6 +21,55 @@ docker-compose --profile nacos up -d
 
 # 启动导航 + Apollo
 docker-compose --profile apollo up -d
+```
+
+## 容器运行时配置
+
+镜像构建完成后，`docker-entrypoint.sh` 在每次容器启动时：
+
+1. 根据环境变量生成 `/usr/share/nginx/html/config.js`，对引号、反斜杠、换行等做安全转义；
+2. 用 `RB_PROXY_UPSTREAM` 渲染 Nginx 的 `/rainbow-bridge/` 反向代理；
+3. 校验并启动 Nginx。
+
+页面在应用 bundle 之前加载 `config.js`，取值优先级为：
+
+```
+浏览器「三方API 设置」Cookie (__rb_settings__)  >  容器运行配置 (config.js)  >  构建时默认值
+```
+
+因此同一个 EWork 镜像只需调整运行参数即可切换虹桥实例和团队环境，无需重新构建：
+
+```bash
+docker run -d --name ework-nav -p 8080:80 \
+  -e DATA_MODE=remote \
+  -e CONFIG_TYPE=rainbow-bridge \
+  -e RB_BASE_URL=/rainbow-bridge \
+  -e RB_ENVIRONMENT=<团队环境 key> \
+  -e RB_PROXY_UPSTREAM=http://<虹桥主机>:<端口> \
+  ework-nav:latest
+```
+
+修改环境变量后重启容器生效。如果试点浏览器此前保存过「三方API 设置」，
+Cookie `__rb_settings__` 会覆盖容器配置；试点前清除该 Cookie，或在设置面板点击「恢复默认」。
+`RB_PROXY_UPSTREAM` 只写 `scheme://host[:port]`，脚本会自动去掉误带的 `/rainbow-bridge`，避免代理路径重复。
+
+### 内网试点配置示例
+
+仓库内的 `deploy/ework-pilot.env.example` 可直接复制填写，Compose 会读取其中的变量：
+
+```bash
+cp deploy/ework-pilot.env.example deploy/ework-pilot.env
+# 填写 RB_ENVIRONMENT、RB_PROXY_UPSTREAM 等实际值
+docker compose --env-file deploy/ework-pilot.env up -d --build
+```
+
+启动后可先检查运行配置和公开接口：
+
+```bash
+curl -s http://127.0.0.1:8080/config.js
+curl -s http://127.0.0.1:8080/rainbow-bridge/api/v1/runtime/overview
+curl -s -H 'x-environment: <环境 key>' -H 'x-pipeline: <渠道 key>' \
+  'http://127.0.0.1:8080/rainbow-bridge/api/v1/runtime/release?scope_id=<scope_id>'
 ```
 
 ## 配置说明
@@ -37,8 +85,13 @@ docker-compose --profile apollo up -d
 ### 虹桥计划配置
 | 变量名 | 默认值 | 说明 |
 |--------|--------|------|
-| `RB_BASE_URL` | /rainbow-bridge | API 地址 |
-| `RB_ENVIRONMENT` | navi | 环境名称 |
+| `RB_BASE_URL` | /rainbow-bridge | 页面读取虹桥的 API 地址，建议保持同源相对路径 |
+| `RB_ENVIRONMENT` | navi | 团队环境 key，对应虹桥 `/runtime/overview` 中的 `environment_key` |
+| `RB_PROXY_UPSTREAM` | https://rainbow.me | Nginx 实际代理到的虹桥 origin，只写 `scheme://host[:port]` |
+| `RB_PROXY_HOST` | 由上游推导 | 转发时使用的 Host 头，特殊虚拟主机场景才需要显式指定 |
+| `RB_PROXY_REFERER` | 由上游推导 | 转发时使用的 Referer；显式设为空串表示不发送 |
+
+`RB_PROXY_HOST` / `RB_PROXY_REFERER` 只在部署方需要覆盖时设置，普通试点不需要。
 
 ### Nacos 配置
 | 变量名 | 默认值 | 说明 |

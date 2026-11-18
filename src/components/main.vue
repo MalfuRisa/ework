@@ -39,7 +39,7 @@
                     <Button class="reset-btn" @click="resetSearch" v-show="searchStatus">重置</Button>
                 </Header>
                 <Content class="layout-scroll-area">
-                    <NavSub :data="data" :spinShow="spinShow"></NavSub>
+                    <NavSub :data="data" :catalog="fullData" :filter-history="filterHistory" :spinShow="spinShow"></NavSub>
                 </Content>
                 <Footer class="layout-footer-center">版权 © 2014-2026 MurphyYi · <a
                         href="https://github.com/yi-nology/ework" target="_blank">GitHub (项目地址)</a></Footer>
@@ -57,10 +57,12 @@
             const enableRb = process.env.VUE_APP_ENABLE_RB !== 'false'
             let currentDataMode = 'local'
             let rbPipeline = 'main'
+            let filterHistory = false
             if (enableRb) {
                 var loadRbSettings = require('@/common/js/cache').loadRbSettings
                 var rbSettings = loadRbSettings()
                 currentDataMode = rbSettings.dataMode
+                filterHistory = rbSettings.dataMode === 'remote' && rbSettings.configType === 'rainbow-bridge'
                 rbPipeline = process.env.VUE_APP_RB_PIPELINE || 'main'
             }
             return {
@@ -68,11 +70,13 @@
                 search: '',
                 searchStatus: false,
                 data: {},
+                fullData: [],
                 sourceData: '',
                 serarchNum: 0,
                 spinShow: false,
                 showSettings: false,
                 enableRb: enableRb,
+                filterHistory: filterHistory,
                 currentDataMode: currentDataMode,
                 rbPipeline: rbPipeline
             }
@@ -88,10 +92,19 @@
         methods: {
             githubWebData(){
               this.spinShow = true
-              GetWebData().then((data)=>{
-                this.data=data.data
-              }).catch(() => {
-                this.$Message.error('数据加载失败，请检查配置')
+              GetWebData().then((payload)=>{
+                this.data = Array.isArray(payload.data) ? payload.data : []
+                this.fullData = JSON.parse(JSON.stringify(this.data))
+                if (payload.warnings && payload.warnings.length > 0) {
+                    var names = payload.warnings.map(function (item) { return item.title || item.key }).join('、')
+                    this.$Message.warning('部分分组加载失败：' + names)
+                }
+              }).catch((error) => {
+                var detail = error && (error.message || (error.response && error.response.data && error.response.data.error))
+                if (!detail || /^Request failed with status code|^Network Error$/i.test(detail)) {
+                    detail = '数据加载失败，请检查配置'
+                }
+                this.$Message.error(detail)
               }).finally(() => {
                 this.spinShow = false
               })
