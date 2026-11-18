@@ -31,7 +31,7 @@ jobs:
           test -s "docs/releases/${GITHUB_REF_NAME}.md"
           corepack enable
           corepack prepare yarn@1.22.22 --activate
-          yarn install --frozen-lockfile --non-interactive
+          yarn install --frozen-lockfile --non-interactive --ignore-engines
           yarn build
           test -s dist/index.html
           test -s dist/config.js
